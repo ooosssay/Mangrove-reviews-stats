@@ -7,6 +7,8 @@ from urllib.parse import parse_qs, urlparse
 
 BASE = "https://api.mangrove.reviews/reviews"
 PAGE = 3000  # API rejects JSON requests above 3500
+# Tells the Mangrove team who is calling. Replace with your own repo URL.
+USER_AGENT = "mangrove-reviews-stats (https://github.com/ooosssay/Mangrove-reviews-stats)"
 TYPES = ["poi", "website", "company", "book", "other"]
 
 
@@ -14,7 +16,8 @@ def fetch_all():
     reviews, offset = [], 0
     while True:
         url = f"{BASE}?limit={PAGE}&offset={offset}"
-        with urllib.request.urlopen(url, timeout=120) as resp:
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=120) as resp:
             batch = json.load(resp)["reviews"]
         reviews.extend(batch)
         if len(batch) < PAGE:
