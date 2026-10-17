@@ -1,0 +1,27 @@
+name: Update Mangrove chart
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # every Monday 06:00 UTC
+  workflow_dispatch:       # lets you run it manually from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install matplotlib
+      - run: python plot_reviews.py
+      - name: Commit chart
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add reviews_over_time.png
+          git diff --staged --quiet || git commit -m "Update chart"
+          git push
