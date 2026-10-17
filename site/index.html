@@ -14,22 +14,35 @@
   main { max-width:1000px; margin:0 auto; padding:20px 16px 40px; }
   h1 { font-size:1.5rem; margin:0 0 4px; }
   h2 { font-size:1.05rem; margin:0 0 10px; }
-  .sub { color:var(--muted); font-size:.9rem; margin-bottom:20px; }
+  .sub { color:var(--muted); font-size:.9rem; }
   .card { background:var(--card); border-radius:12px; padding:14px; margin-bottom:16px; }
   .grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); }
   .grid .card { margin-bottom:0; }
+  .pills { display:flex; gap:8px; overflow-x:auto; padding:16px 0 6px; scrollbar-width:none; }
+  .pills::-webkit-scrollbar { display:none; }
+  .pill { flex:0 0 auto; border:1px solid var(--grid); background:transparent; color:var(--fg); padding:7px 14px; border-radius:20px; font-size:.9rem; cursor:pointer; white-space:nowrap; }
+  .pill small { color:var(--muted); margin-left:4px; }
+  .pill.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .pill.on small { color:#ffffffcc; }
+  .pill:disabled { opacity:.45; cursor:default; }
+  .total { margin:10px 0 20px; font-size:1rem; color:var(--muted); }
+  .total .num { color:var(--fg); font-size:2rem; font-weight:700; margin-right:6px; }
   .toggle { display:inline-flex; gap:6px; margin-bottom:10px; }
   .toggle button { border:1px solid var(--grid); background:transparent; color:var(--fg); padding:6px 14px; border-radius:20px; font-size:.9rem; cursor:pointer; }
   .toggle button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
   .box { position:relative; height:320px; }
   .small { height:300px; }
-  .empty { color:var(--muted); padding:40px 0; text-align:center; }
+  .empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:var(--card); color:var(--muted); text-align:center; }
+  .note { margin-bottom:6px; }
 </style>
 </head>
 <body>
 <main>
   <h1>Mangrove Reviews Stats</h1>
   <div class="sub" id="meta">Loading...</div>
+
+  <div class="pills" id="pills"></div>
+  <div class="total"><span class="num" id="totalNum">0</span><span id="totalFor">reviews</span></div>
 
   <div class="card">
     <h2>Reviews over time</h2>
@@ -38,26 +51,26 @@
       <button data-g="week">Weekly</button>
       <button data-g="month">Monthly</button>
     </div>
-    <div class="box"><canvas id="timeChart"></canvas></div>
+    <div class="box"><canvas id="timeChart"></canvas><div class="empty" id="e-time" hidden>No reviews of this type yet</div></div>
   </div>
 
   <div class="card">
     <h2>Growth by source</h2>
-    <div class="sub" style="margin-bottom:6px">Total reviews over time, split by the site used to write them</div>
-    <div class="box"><canvas id="growthChart"></canvas></div>
+    <div class="sub note">Total reviews over time, split by the site used to write them</div>
+    <div class="box"><canvas id="growthChart"></canvas><div class="empty" id="e-growth" hidden>No reviews of this type yet</div></div>
   </div>
 
   <div class="grid">
-    <div class="card"><h2>Reviews by subject type</h2><div class="box small"><canvas id="typeChart"></canvas></div></div>
-    <div class="card"><h2>Sites used to write reviews</h2><div class="box small" id="b-clients"><canvas id="clientChart"></canvas></div></div>
-    <div class="card"><h2>Reviewer activity</h2><div class="sub" id="m-reviewers" style="margin-bottom:6px"></div><div class="box small"><canvas id="reviewerChart"></canvas></div></div>
-    <div class="card"><h2>Type of experience</h2><div class="sub" id="m-exp" style="margin-bottom:6px"></div><div class="box small" id="b-exp"><canvas id="expChart"></canvas></div></div>
-    <div class="card"><h2>Affiliated and automated reviews</h2><div class="sub" style="margin-bottom:6px">Based on flags set by the review writer</div><div class="box small"><canvas id="flagChart"></canvas></div></div>
+    <div class="card"><h2>Sites used to write reviews</h2><div class="box small"><canvas id="clientChart"></canvas><div class="empty" id="e-client" hidden>No data yet</div></div></div>
+    <div class="card"><h2>Reviewer activity</h2><div class="sub note" id="m-reviewers"></div><div class="box small"><canvas id="reviewerChart"></canvas><div class="empty" id="e-reviewer" hidden>No data yet</div></div></div>
+    <div class="card"><h2>Type of experience</h2><div class="sub note" id="m-exp"></div><div class="box small"><canvas id="expChart"></canvas><div class="empty" id="e-exp" hidden>No reviews with this info yet</div></div></div>
+    <div class="card"><h2>Affiliated and automated reviews</h2><div class="sub note">Based on flags set by the review writer</div><div class="box small"><canvas id="flagChart"></canvas><div class="empty" id="e-flag" hidden>No data yet</div></div></div>
   </div>
 </main>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script>
+const $ = id => document.getElementById(id);
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 Chart.defaults.color = css('--fg');
 Chart.defaults.borderColor = css('--grid');
@@ -76,158 +89,178 @@ const nextKey = (k, g) => {
 };
 const fmt = (k, g) => new Date(k).toISOString().slice(0, g === 'month' ? 7 : 10);
 const short = s => (s.length > 28 ? s.slice(0, 27) + '…' : s);
+const showEmpty = (id, on) => { $(id).hidden = !on; };
 
-function series(timestamps, g) {
+// Counts per bucket from a list of timestamps, filled so the timeline is continuous
+function timeline(timestamps, g) {
   const counts = new Map();
-  for (const ts of timestamps) {
-    const k = bucketKey(ts, g);
-    counts.set(k, (counts.get(k) || 0) + 1);
-  }
-  if (!counts.size) return { labels: [], per: [], cum: [] };
+  for (const ts of timestamps) { const k = bucketKey(ts, g); counts.set(k, (counts.get(k) || 0) + 1); }
+  if (!counts.size) return { keys: [], labels: [], counts };
   const first = Math.min(...counts.keys());
   const last = bucketKey(Math.max(Date.now() / 1000, timestamps[timestamps.length - 1]), g);
-  const labels = [], per = [], cum = [];
-  let total = 0;
-  for (let k = first; k <= last; k = nextKey(k, g)) {
-    const n = counts.get(k) || 0;
-    total += n;
-    labels.push(fmt(k, g)); per.push(n); cum.push(total);
-  }
-  return { labels, per, cum };
+  const keys = [], labels = [];
+  for (let k = first; k <= last; k = nextKey(k, g)) { keys.push(k); labels.push(fmt(k, g)); }
+  return { keys, labels, counts };
 }
 
-function topChart(id, rows, boxId) {
-  if (!rows || !rows.length) {
-    document.getElementById(boxId).innerHTML = '<div class="empty">No reviews of this type yet</div>';
-    return;
-  }
-  new Chart(document.getElementById(id), {
-    type: 'bar',
-    data: { labels: rows.map(r => r.label), datasets: [{ data: rows.map(r => r.count), backgroundColor: css('--accent') }] },
-    options: {
-      indexAxis: 'y',
-      plugins: {
-        legend: { display: false },
-        tooltip: { callbacks: {
-          title: items => rows[items[0].dataIndex].label,
-          label: i => i.parsed.x + ' reviews',
-          afterLabel: i => { const a = rows[i.dataIndex].avg_rating; return a == null ? '' : 'Average rating: ' + a + '/100'; }
-        } }
-      },
-      scales: {
-        x: { beginAtZero: true, ticks: { precision: 0 } },
-        y: { ticks: { callback(v) { return short(this.getLabelForValue(v)); } } }
-      }
-    }
-  });
-}
+const NAMES = { poi: 'Places', website: 'Websites', company: 'Companies', book: 'Books', other: 'Other' };
+const EXP = { business: 'Business', family: 'Family', couple: 'Couple', friends: 'Friends', solo: 'Solo' };
+const palette = ['#2a9d8f', '#e76f51', '#e9c46a', '#264653', '#8ab17d', '#b5838d', '#9aa5b1'];
+const noLegend = { legend: { display: false } };
+const countAxis = { beginAtZero: true, ticks: { precision: 0 } };
 
 fetch('data.json').then(r => r.json()).then(data => {
-  document.getElementById('meta').textContent =
-    data.total.toLocaleString() + ' reviews. Updated ' + data.generated.slice(0, 16).replace('T', ' ') + ' UTC.';
+  $('meta').textContent = 'Updated ' + data.generated.slice(0, 16).replace('T', ' ') + ' UTC';
 
-  const ctx = document.getElementById('timeChart');
-  let g = 'day';
-  const s0 = series(data.timestamps, g);
-  const timeChart = new Chart(ctx, {
-    data: {
-      labels: s0.labels,
-      datasets: [
-        { type: 'bar', label: 'New reviews', data: s0.per, backgroundColor: css('--accent'), yAxisID: 'y' },
-        { type: 'line', label: 'Total', data: s0.cum, borderColor: css('--accent2'), pointRadius: 0, yAxisID: 'y1' }
-      ]
-    },
+  const T = data.types;
+  const rowsFor = f => f === 'all' ? data.rows : data.rows.filter(r => T[r[1]] === f);
+  let filter = 'all', g = 'day';
+
+  // Pills
+  const typeCounts = {};
+  data.rows.forEach(r => { typeCounts[T[r[1]]] = (typeCounts[T[r[1]]] || 0) + 1; });
+  const pillList = [['all', 'All', data.rows.length]].concat(
+    T.filter(t => t !== 'other' || typeCounts.other).map(t => [t, NAMES[t], typeCounts[t] || 0]));
+  $('pills').innerHTML = pillList.map(([k, name, n]) =>
+    `<button class="pill${k === 'all' ? ' on' : ''}" data-f="${k}"${n ? '' : ' disabled'}>${name}<small>${n.toLocaleString()}</small></button>`).join('');
+
+  // Charts (created once, updated on every filter change)
+  const timeChart = new Chart($('timeChart'), {
+    data: { labels: [], datasets: [
+      { type: 'bar', label: 'New reviews', data: [], backgroundColor: css('--accent'), yAxisID: 'y' },
+      { type: 'line', label: 'Total', data: [], borderColor: css('--accent2'), pointRadius: 0, yAxisID: 'y1' }
+    ] },
     options: {
       interaction: { mode: 'index', intersect: false },
       scales: {
         x: { ticks: { maxTicksLimit: 10, maxRotation: 0 } },
-        y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'New reviews' } },
+        y: { ...countAxis, title: { display: true, text: 'New reviews' } },
         y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Total' } }
       }
     }
   });
-  document.getElementById('toggle').addEventListener('click', e => {
-    const b = e.target.closest('button'); if (!b) return;
-    g = b.dataset.g;
-    document.querySelectorAll('#toggle button').forEach(x => x.classList.toggle('on', x === b));
-    const s = series(data.timestamps, g);
-    timeChart.data.labels = s.labels;
-    timeChart.data.datasets[0].data = s.per;
-    timeChart.data.datasets[1].data = s.cum;
-    timeChart.update();
-  });
-
-  const names = { poi: 'Places', website: 'Websites', company: 'Companies', book: 'Books', review: 'Reviews of reviews', other: 'Other' };
-  const keys = Object.keys(data.types).sort((a, b) => data.types[b] - data.types[a]);
-  new Chart(document.getElementById('typeChart'), {
-    type: 'bar',
-    data: { labels: keys.map(k => names[k] || k), datasets: [{ data: keys.map(k => data.types[k]), backgroundColor: css('--accent') }] },
-    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
-  });
-
-
-  // Growth by source (stacked area)
-  const palette = ['#2a9d8f', '#e76f51', '#e9c46a', '#264653', '#8ab17d', '#b5838d', '#9aa5b1'];
-  new Chart(document.getElementById('growthChart'), {
-    type: 'line',
-    data: {
-      labels: data.growth.months,
-      datasets: Object.entries(data.growth.series).map(([name, vals], i) => ({
-        label: name, data: vals, fill: true, pointRadius: 0, borderWidth: 1,
-        backgroundColor: palette[i % palette.length] + 'cc', borderColor: palette[i % palette.length]
-      }))
-    },
+  const growthChart = new Chart($('growthChart'), {
+    type: 'line', data: { labels: [], datasets: [] },
     options: {
       interaction: { mode: 'index', intersect: false },
-      scales: {
-        x: { ticks: { maxTicksLimit: 10, maxRotation: 0 } },
-        y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } }
-      },
+      scales: { x: { ticks: { maxTicksLimit: 10, maxRotation: 0 } }, y: { stacked: true, ...countAxis } },
       plugins: { legend: { position: 'bottom' } }
     }
   });
-
-  // Reviewer activity
-  const rb = data.reviewers.buckets;
-  document.getElementById('m-reviewers').textContent =
-    data.reviewers.total.toLocaleString() + ' reviewers in total. Bars show how many reviewers wrote each number of reviews.';
-  new Chart(document.getElementById('reviewerChart'), {
+  const clientChart = new Chart($('clientChart'), {
+    type: 'bar', data: { labels: [], datasets: [{ data: [], backgroundColor: css('--accent') }] },
+    options: { indexAxis: 'y', plugins: { ...noLegend, tooltip: { callbacks: { label: i => i.parsed.x + ' reviews' } } },
+      scales: { x: countAxis, y: { ticks: { callback(v) { return short(this.getLabelForValue(v)); } } } } }
+  });
+  const reviewerChart = new Chart($('reviewerChart'), {
+    type: 'bar', data: { labels: [], datasets: [{ data: [], backgroundColor: css('--accent') }] },
+    options: { plugins: noLegend, scales: { y: countAxis } }
+  });
+  const expChart = new Chart($('expChart'), {
+    type: 'bar', data: { labels: [], datasets: [{ data: [], backgroundColor: css('--accent') }] },
+    options: { plugins: noLegend, scales: { y: countAxis } }
+  });
+  const flagChart = new Chart($('flagChart'), {
     type: 'bar',
-    data: { labels: Object.keys(rb), datasets: [{ data: Object.values(rb), backgroundColor: css('--accent') }] },
-    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+    data: { labels: ['Affiliated (owner or staff)', 'Auto-generated', 'Neither flagged'],
+      datasets: [{ data: [0, 0, 0], backgroundColor: [css('--accent2'), '#e9c46a', css('--accent')] }] },
+    options: { plugins: noLegend, scales: { y: countAxis } }
   });
 
-  // Experience type
-  const en = { business: 'Business', family: 'Family', couple: 'Couple', friends: 'Friends', solo: 'Solo' };
-  const ek = Object.keys(data.experience).sort((a, b) => data.experience[b] - data.experience[a]);
-  const eTotal = ek.reduce((a, k) => a + data.experience[k], 0);
-  document.getElementById('m-exp').textContent =
-    eTotal.toLocaleString() + ' of ' + data.total.toLocaleString() + ' reviews filled this in.';
-  if (!ek.length) {
-    document.getElementById('b-exp').innerHTML = '<div class="empty">No reviews with this info yet</div>';
-  } else {
-    new Chart(document.getElementById('expChart'), {
-      type: 'bar',
-      data: { labels: ek.map(k => en[k] || k), datasets: [{ data: ek.map(k => data.experience[k]), backgroundColor: css('--accent') }] },
-      options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+  function render() {
+    const rows = rowsFor(filter);
+    const ts = rows.map(r => r[0]);
+    const empty = !rows.length;
+
+    $('totalNum').textContent = rows.length.toLocaleString();
+    $('totalFor').textContent = filter === 'all' ? 'reviews' : 'reviews of ' + NAMES[filter].toLowerCase();
+
+    // Over time
+    const tl = timeline(ts, g);
+    const per = tl.keys.map(k => tl.counts.get(k) || 0);
+    let run = 0;
+    timeChart.data.labels = tl.labels;
+    timeChart.data.datasets[0].data = per;
+    timeChart.data.datasets[1].data = per.map(n => (run += n));
+    timeChart.update();
+    showEmpty('e-time', empty);
+
+    // Growth by source (monthly, cumulative, top 6 + other)
+    const gl = timeline(ts, 'month');
+    const byClient = new Map();
+    rows.forEach(r => {
+      const m = byClient.get(r[2]) || new Map(), k = bucketKey(r[0], 'month');
+      m.set(k, (m.get(k) || 0) + 1); byClient.set(r[2], m);
     });
+    const ranked = [...byClient.entries()].sort((a, b) =>
+      [...b[1].values()].reduce((x, y) => x + y, 0) - [...a[1].values()].reduce((x, y) => x + y, 0));
+    const groups = ranked.slice(0, 6).map(([c, m]) => [data.clients[c], [m]]);
+    if (ranked.length > 6) groups.push(['other', ranked.slice(6).map(e => e[1])]);
+    growthChart.data.labels = gl.labels;
+    growthChart.data.datasets = groups.map(([name, maps], i) => {
+      let total = 0;
+      return { label: name, fill: true, pointRadius: 0, borderWidth: 1,
+        backgroundColor: palette[i % palette.length] + 'cc', borderColor: palette[i % palette.length],
+        data: gl.keys.map(k => (total += maps.reduce((s, m) => s + (m.get(k) || 0), 0))) };
+    });
+    growthChart.update();
+    showEmpty('e-growth', empty);
+
+    // Sites used to write reviews (top 10, known sources only)
+    const unknown = data.clients.indexOf('unknown');
+    const cc = new Map();
+    rows.forEach(r => { if (r[2] !== unknown) cc.set(r[2], (cc.get(r[2]) || 0) + 1); });
+    const top = [...cc.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+    clientChart.data.labels = top.map(e => data.clients[e[0]]);
+    clientChart.data.datasets[0].data = top.map(e => e[1]);
+    clientChart.update();
+    showEmpty('e-client', !top.length);
+
+    // Reviewer activity (counts only)
+    const rc = new Map();
+    rows.forEach(r => rc.set(r[3], (rc.get(r[3]) || 0) + 1));
+    const b = { '1 review': 0, '2 to 5': 0, '6 to 20': 0, '21+': 0 };
+    rc.forEach(n => { b[n === 1 ? '1 review' : n <= 5 ? '2 to 5' : n <= 20 ? '6 to 20' : '21+']++; });
+    reviewerChart.data.labels = Object.keys(b);
+    reviewerChart.data.datasets[0].data = Object.values(b);
+    reviewerChart.update();
+    $('m-reviewers').textContent = rc.size.toLocaleString() + ' reviewers in this view. Bars show how many wrote each number of reviews.';
+    showEmpty('e-reviewer', empty);
+
+    // Type of experience
+    const ec = new Map();
+    rows.forEach(r => { if (r[4] >= 0) ec.set(r[4], (ec.get(r[4]) || 0) + 1); });
+    const ek = [...ec.entries()].sort((a, b) => b[1] - a[1]);
+    const filled = ek.reduce((s, e) => s + e[1], 0);
+    expChart.data.labels = ek.map(e => EXP[data.experiences[e[0]]] || data.experiences[e[0]]);
+    expChart.data.datasets[0].data = ek.map(e => e[1]);
+    expChart.update();
+    $('m-exp').textContent = filled.toLocaleString() + ' of ' + rows.length.toLocaleString() + ' reviews filled this in.';
+    showEmpty('e-exp', !ek.length);
+
+    // Affiliated / automated
+    let aff = 0, gen = 0, neither = 0;
+    rows.forEach(r => { if (r[5] & 1) aff++; if (r[5] & 2) gen++; if (!r[5]) neither++; });
+    flagChart.data.datasets[0].data = [aff, gen, neither];
+    flagChart.update();
+    showEmpty('e-flag', empty);
   }
 
-  // Affiliated / automated flags
-  const fl = data.flags;
-  new Chart(document.getElementById('flagChart'), {
-    type: 'bar',
-    data: {
-      labels: ['Affiliated (owner or staff)', 'Auto-generated', 'Neither flagged'],
-      datasets: [{ data: [fl.affiliated || 0, fl.generated || 0, fl.neither || 0], backgroundColor: [css('--accent2'), '#e9c46a', css('--accent')] }]
-    },
-    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+  $('pills').addEventListener('click', e => {
+    const p = e.target.closest('.pill'); if (!p || p.disabled) return;
+    filter = p.dataset.f;
+    document.querySelectorAll('.pill').forEach(x => x.classList.toggle('on', x === p));
+    render();
+  });
+  $('toggle').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    g = b.dataset.g;
+    document.querySelectorAll('#toggle button').forEach(x => x.classList.toggle('on', x === b));
+    render();
   });
 
-  topChart('clientChart', data.clients, 'b-clients');
-}).catch(err => {
-  document.getElementById('meta').textContent = 'Could not load data.json: ' + err;
-});
+  render();
+}).catch(err => { $('meta').textContent = 'Could not load data.json: ' + err; });
 </script>
 </body>
 </html>
