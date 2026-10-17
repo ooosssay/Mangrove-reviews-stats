@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mangrove Reviews Stats</title>
+<style>
+  :root { --bg:#ffffff; --fg:#1d2733; --muted:#6b7785; --card:#f3f6f8; --accent:#2a9d8f; --accent2:#e76f51; --grid:#dde3e8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12171c; --fg:#e6ebf0; --muted:#97a3af; --card:#1b232b; --grid:#2c3742; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; line-height:1.4; }
+  main { max-width:1000px; margin:0 auto; padding:20px 16px 40px; }
+  h1 { font-size:1.5rem; margin:0 0 4px; }
+  h2 { font-size:1.05rem; margin:0 0 10px; }
+  .sub { color:var(--muted); font-size:.9rem; margin-bottom:20px; }
+  .card { background:var(--card); border-radius:12px; padding:14px; margin-bottom:16px; }
+  .grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); }
+  .grid .card { margin-bottom:0; }
+  .toggle { display:inline-flex; gap:6px; margin-bottom:10px; }
+  .toggle button { border:1px solid var(--grid); background:transparent; color:var(--fg); padding:6px 14px; border-radius:20px; font-size:.9rem; cursor:pointer; }
+  .toggle button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .box { position:relative; height:320px; }
+  .small { height:300px; }
+  .empty { color:var(--muted); padding:40px 0; text-align:center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Mangrove Reviews Stats</h1>
+  <div class="sub" id="meta">Loading...</div>
+
+  <div class="card">
+    <h2>Reviews over time</h2>
+    <div class="toggle" id="toggle">
+      <button data-g="day" class="on">Daily</button>
+      <button data-g="week">Weekly</button>
+      <button data-g="month">Monthly</button>
+    </div>
+    <div class="box"><canvas id="timeChart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h2>Growth by source</h2>
+    <div class="sub" style="margin-bottom:6px">Total reviews over time, split by the site used to write them</div>
+    <div class="box"><canvas id="growthChart"></canvas></div>
+  </div>
+
+  <div class="grid">
+    <div class="card"><h2>Reviews by subject type</h2><div class="box small"><canvas id="typeChart"></canvas></div></div>
+    <div class="card"><h2>Sites used to write reviews</h2><div class="box small" id="b-clients"><canvas id="clientChart"></canvas></div></div>
+    <div class="card"><h2>Reviewer activity</h2><div class="sub" id="m-reviewers" style="margin-bottom:6px"></div><div class="box small"><canvas id="reviewerChart"></canvas></div></div>
+    <div class="card"><h2>Type of experience</h2><div class="sub" id="m-exp" style="margin-bottom:6px"></div><div class="box small" id="b-exp"><canvas id="expChart"></canvas></div></div>
+    <div class="card"><h2>Affiliated and automated reviews</h2><div class="sub" style="margin-bottom:6px">Based on flags set by the review writer</div><div class="box small"><canvas id="flagChart"></canvas></div></div>
+  </div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+Chart.defaults.color = css('--fg');
+Chart.defaults.borderColor = css('--grid');
+Chart.defaults.maintainAspectRatio = false;
+
+const DAY = 86400000;
+const bucketKey = (ts, g) => {
+  const d = new Date(ts * 1000), y = d.getUTCFullYear(), m = d.getUTCMonth(), day = d.getUTCDate();
+  if (g === 'month') return Date.UTC(y, m, 1);
+  if (g === 'week') return Date.UTC(y, m, day - ((d.getUTCDay() + 6) % 7));
+  return Date.UTC(y, m, day);
+};
+const nextKey = (k, g) => {
+  if (g === 'month') { const d = new Date(k); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1); }
+  return k + (g === 'week' ? 7 : 1) * DAY;
+};
+const fmt = (k, g) => new Date(k).toISOString().slice(0, g === 'month' ? 7 : 10);
+const short = s => (s.length > 28 ? s.slice(0, 27) + '…' : s);
+
+function series(timestamps, g) {
+  const counts = new Map();
+  for (const ts of timestamps) {
+    const k = bucketKey(ts, g);
+    counts.set(k, (counts.get(k) || 0) + 1);
+  }
+  if (!counts.size) return { labels: [], per: [], cum: [] };
+  const first = Math.min(...counts.keys());
+  const last = bucketKey(Math.max(Date.now() / 1000, timestamps[timestamps.length - 1]), g);
+  const labels = [], per = [], cum = [];
+  let total = 0;
+  for (let k = first; k <= last; k = nextKey(k, g)) {
+    const n = counts.get(k) || 0;
+    total += n;
+    labels.push(fmt(k, g)); per.push(n); cum.push(total);
+  }
+  return { labels, per, cum };
+}
+
+function topChart(id, rows, boxId) {
+  if (!rows || !rows.length) {
+    document.getElementById(boxId).innerHTML = '<div class="empty">No reviews of this type yet</div>';
+    return;
+  }
+  new Chart(document.getElementById(id), {
+    type: 'bar',
+    data: { labels: rows.map(r => r.label), datasets: [{ data: rows.map(r => r.count), backgroundColor: css('--accent') }] },
+    options: {
+      indexAxis: 'y',
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: {
+          title: items => rows[items[0].dataIndex].label,
+          label: i => i.parsed.x + ' reviews',
+          afterLabel: i => { const a = rows[i.dataIndex].avg_rating; return a == null ? '' : 'Average rating: ' + a + '/100'; }
+        } }
+      },
+      scales: {
+        x: { beginAtZero: true, ticks: { precision: 0 } },
+        y: { ticks: { callback(v) { return short(this.getLabelForValue(v)); } } }
+      }
+    }
+  });
+}
+
+fetch('data.json').then(r => r.json()).then(data => {
+  document.getElementById('meta').textContent =
+    data.total.toLocaleString() + ' reviews. Updated ' + data.generated.slice(0, 16).replace('T', ' ') + ' UTC.';
+
+  const ctx = document.getElementById('timeChart');
+  let g = 'day';
+  const s0 = series(data.timestamps, g);
+  const timeChart = new Chart(ctx, {
+    data: {
+      labels: s0.labels,
+      datasets: [
+        { type: 'bar', label: 'New reviews', data: s0.per, backgroundColor: css('--accent'), yAxisID: 'y' },
+        { type: 'line', label: 'Total', data: s0.cum, borderColor: css('--accent2'), pointRadius: 0, yAxisID: 'y1' }
+      ]
+    },
+    options: {
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { ticks: { maxTicksLimit: 10, maxRotation: 0 } },
+        y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'New reviews' } },
+        y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Total' } }
+      }
+    }
+  });
+  document.getElementById('toggle').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    g = b.dataset.g;
+    document.querySelectorAll('#toggle button').forEach(x => x.classList.toggle('on', x === b));
+    const s = series(data.timestamps, g);
+    timeChart.data.labels = s.labels;
+    timeChart.data.datasets[0].data = s.per;
+    timeChart.data.datasets[1].data = s.cum;
+    timeChart.update();
+  });
+
+  const names = { poi: 'Places', website: 'Websites', company: 'Companies', book: 'Books', review: 'Reviews of reviews', other: 'Other' };
+  const keys = Object.keys(data.types).sort((a, b) => data.types[b] - data.types[a]);
+  new Chart(document.getElementById('typeChart'), {
+    type: 'bar',
+    data: { labels: keys.map(k => names[k] || k), datasets: [{ data: keys.map(k => data.types[k]), backgroundColor: css('--accent') }] },
+    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+  });
+
+
+  // Growth by source (stacked area)
+  const palette = ['#2a9d8f', '#e76f51', '#e9c46a', '#264653', '#8ab17d', '#b5838d', '#9aa5b1'];
+  new Chart(document.getElementById('growthChart'), {
+    type: 'line',
+    data: {
+      labels: data.growth.months,
+      datasets: Object.entries(data.growth.series).map(([name, vals], i) => ({
+        label: name, data: vals, fill: true, pointRadius: 0, borderWidth: 1,
+        backgroundColor: palette[i % palette.length] + 'cc', borderColor: palette[i % palette.length]
+      }))
+    },
+    options: {
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { ticks: { maxTicksLimit: 10, maxRotation: 0 } },
+        y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } }
+      },
+      plugins: { legend: { position: 'bottom' } }
+    }
+  });
+
+  // Reviewer activity
+  const rb = data.reviewers.buckets;
+  document.getElementById('m-reviewers').textContent =
+    data.reviewers.total.toLocaleString() + ' reviewers in total. Bars show how many reviewers wrote each number of reviews.';
+  new Chart(document.getElementById('reviewerChart'), {
+    type: 'bar',
+    data: { labels: Object.keys(rb), datasets: [{ data: Object.values(rb), backgroundColor: css('--accent') }] },
+    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+  });
+
+  // Experience type
+  const en = { business: 'Business', family: 'Family', couple: 'Couple', friends: 'Friends', solo: 'Solo' };
+  const ek = Object.keys(data.experience).sort((a, b) => data.experience[b] - data.experience[a]);
+  const eTotal = ek.reduce((a, k) => a + data.experience[k], 0);
+  document.getElementById('m-exp').textContent =
+    eTotal.toLocaleString() + ' of ' + data.total.toLocaleString() + ' reviews filled this in.';
+  if (!ek.length) {
+    document.getElementById('b-exp').innerHTML = '<div class="empty">No reviews with this info yet</div>';
+  } else {
+    new Chart(document.getElementById('expChart'), {
+      type: 'bar',
+      data: { labels: ek.map(k => en[k] || k), datasets: [{ data: ek.map(k => data.experience[k]), backgroundColor: css('--accent') }] },
+      options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+    });
+  }
+
+  // Affiliated / automated flags
+  const fl = data.flags;
+  new Chart(document.getElementById('flagChart'), {
+    type: 'bar',
+    data: {
+      labels: ['Affiliated (owner or staff)', 'Auto-generated', 'Neither flagged'],
+      datasets: [{ data: [fl.affiliated || 0, fl.generated || 0, fl.neither || 0], backgroundColor: [css('--accent2'), '#e9c46a', css('--accent')] }]
+    },
+    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+  });
+
+  topChart('clientChart', data.clients, 'b-clients');
+}).catch(err => {
+  document.getElementById('meta').textContent = 'Could not load data.json: ' + err;
+});
+</script>
+</body>
+</html>
