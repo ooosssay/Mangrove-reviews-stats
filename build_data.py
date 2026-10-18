@@ -9,6 +9,11 @@ BASE = "https://api.mangrove.reviews/reviews"
 PAGE = 3000  # API rejects JSON requests above 3500
 # Tells the Mangrove team who is calling. Replace with your own repo URL.
 USER_AGENT = "mangrove-reviews-stats (https://github.com/ooosssay/Mangrove-reviews-stats)"
+# A source only becomes a clickable link if it appears this many times overall
+# and looks like a normal site address. Sources are self-declared by review
+# writers, so this keeps one-off or junk entries from becoming links.
+MIN_REVIEWS_FOR_LINK = 5
+LINKABLE = re.compile(r"^[a-z0-9.-]+\.[a-z]{2,}(/[A-Za-z0-9._~-]+)*$")
 TYPES = ["poi", "website", "company", "book", "other"]
 
 
@@ -59,7 +64,7 @@ def client_name(client_id):
     if not u.hostname:
         return s
     host = re.sub(r"^www\.", "", u.hostname.lower())
-    parts = [p for p in u.path.lower().split("/") if p]
+    parts = [p for p in u.path.split("/") if p]
     if host in CODE_HOSTS:
         return "/".join([host] + parts[:2])
     if host.endswith(PAGES_SUFFIXES) and parts and "." not in parts[0]:
@@ -68,10 +73,20 @@ def client_name(client_id):
 
 
 def build(reviews):
-    clients, experiences, reviewers = {}, {}, {}
+    clients, experiences, reviewers = {}, {}, {}  # lowercase key -> index
+    display, per_client = [], {}
 
     def idx(table, key):
         return table.setdefault(key, len(table))
+
+    def client_idx(name):
+        key = name.lower()
+        if key not in clients:
+            clients[key] = len(display)
+            display.append(name)
+        i = clients[key]
+        per_client[i] = per_client.get(i, 0) + 1
+        return i
 
     rows = []
     for r in sorted(reviews, key=lambda r: r["payload"]["iat"]):
@@ -83,16 +98,22 @@ def build(reviews):
         rows.append([
             p["iat"],
             TYPES.index(classify(p.get("sub"))),
-            idx(clients, client),
+            client_idx(client),
             idx(reviewers, r.get("kid")),  # anonymous number, key is never published
             idx(experiences, exp) if exp else -1,
             flags,
         ])
 
+    linkable = [
+        i for i, name in enumerate(display)
+        if per_client[i] >= MIN_REVIEWS_FOR_LINK and LINKABLE.match(name)
+    ]
+
     return {
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "types": TYPES,
-        "clients": list(clients),
+        "clients": display,
+        "linkable": linkable,
         "experiences": list(experiences),
         "rows": rows,  # [timestamp, type, client, reviewer, experience, flags]
     }
