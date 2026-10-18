@@ -39,6 +39,34 @@ def classify(sub):
     return "other"  # includes reviews of reviews (urn:maresi:)
 
 
+# Hosts that serve many unrelated projects: keep the owner/repo part of the path
+CODE_HOSTS = {"github.com", "codeberg.org", "gitlab.com", "bitbucket.org"}
+# Per-user page hosts (user.github.io/project): keep the first path part (the project)
+PAGES_SUFFIXES = (".github.io", ".codeberg.page", ".gitlab.io")
+
+
+def client_name(client_id):
+    """Reduce a client_id to its site.
+
+    https://mapcomplete.org/food.html?z=1  -> mapcomplete.org
+    https://github.com/user/repo/blob/x    -> github.com/user/repo
+    https://user.github.io/project/a.html  -> user.github.io/project
+    """
+    s = (client_id or "").strip()
+    if not s:
+        return "unknown"
+    u = urlparse(s if "://" in s else "//" + s)
+    if not u.hostname:
+        return s
+    host = re.sub(r"^www\.", "", u.hostname.lower())
+    parts = [p for p in u.path.lower().split("/") if p]
+    if host in CODE_HOSTS:
+        return "/".join([host] + parts[:2])
+    if host.endswith(PAGES_SUFFIXES) and parts and "." not in parts[0]:
+        return f"{host}/{parts[0]}"
+    return host
+
+
 def build(reviews):
     clients, experiences, reviewers = {}, {}, {}
 
@@ -49,7 +77,7 @@ def build(reviews):
     for r in sorted(reviews, key=lambda r: r["payload"]["iat"]):
         p = r["payload"]
         meta = p.get("metadata") or {}
-        client = re.sub(r"^https?://", "", meta.get("client_id") or "unknown")
+        client = client_name(meta.get("client_id"))
         exp = meta.get("experience_context")
         flags = (1 if meta.get("is_affiliated") else 0) | (2 if meta.get("is_generated") else 0)
         rows.append([
