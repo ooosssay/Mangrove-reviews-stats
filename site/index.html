@@ -27,8 +27,9 @@
   .pill:disabled { opacity:.45; cursor:default; }
   .total { margin:10px 0 20px; font-size:1rem; color:var(--muted); }
   .total .num { color:var(--fg); font-size:2rem; font-weight:700; margin-right:6px; }
+  .controls { display:flex; flex-wrap:wrap; gap:0 16px; }
   .toggle { display:inline-flex; gap:6px; margin-bottom:10px; }
-  .toggle button { border:1px solid var(--grid); background:transparent; color:var(--fg); padding:6px 14px; border-radius:20px; font-size:.9rem; cursor:pointer; }
+  .toggle button { border:1px solid var(--grid); background:transparent; color:var(--fg); padding:8px 14px; border-radius:20px; font-size:.9rem; cursor:pointer; }
   .toggle button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
   .box { position:relative; height:320px; }
   .small { height:300px; }
@@ -57,11 +58,20 @@
 
   <div class="card">
     <h2>Reviews over time</h2>
-    <div class="toggle" id="toggle">
-      <button data-g="day" class="on">Daily</button>
-      <button data-g="week">Weekly</button>
-      <button data-g="month">Monthly</button>
+    <div class="controls">
+      <div class="toggle" id="toggle">
+        <button data-g="day" class="on">Daily</button>
+        <button data-g="week">Weekly</button>
+        <button data-g="month">Monthly</button>
+      </div>
+      <div class="toggle" id="rangeToggle">
+        <button data-r="30">30 days</button>
+        <button data-r="90" class="on">90 days</button>
+        <button data-r="365">1 year</button>
+        <button data-r="0">All</button>
+      </div>
     </div>
+    <div class="sub note" id="timeNote"></div>
     <div class="box"><canvas id="timeChart"></canvas><div class="empty" id="e-time" hidden>No reviews of this type yet</div></div>
   </div>
 
@@ -149,7 +159,7 @@ fetch('data.json').then(r => r.json()).then(data => {
 
   const T = data.types;
   const rowsFor = f => f === 'all' ? data.rows : data.rows.filter(r => T[r[1]] === f);
-  let filter = 'all', g = 'day';
+  let filter = 'all', g = 'day', rangeDays = 90;
 
   // Pills
   const typeCounts = {};
@@ -162,7 +172,7 @@ fetch('data.json').then(r => r.json()).then(data => {
   // Charts (created once, updated on every filter change)
   const timeChart = new Chart($('timeChart'), {
     data: { labels: [], datasets: [
-      { type: 'bar', label: 'New reviews', data: [], backgroundColor: css('--accent'), yAxisID: 'y' },
+      { type: 'bar', label: 'New reviews', data: [], backgroundColor: css('--accent'), yAxisID: 'y', barPercentage: 1, categoryPercentage: 0.9 },
       { type: 'line', label: 'Total', data: [], borderColor: css('--accent2'), pointRadius: 0, yAxisID: 'y1' }
     ] },
     options: {
@@ -211,15 +221,27 @@ fetch('data.json').then(r => r.json()).then(data => {
     $('totalNum').textContent = rows.length.toLocaleString();
     $('totalFor').textContent = filter === 'all' ? 'reviews' : 'reviews of ' + NAMES[filter].toLowerCase();
 
-    // Over time
+    // Over time: full history is bucketed so the running total stays true,
+    // then only the chosen range (e.g. last 90 days) is shown.
     const tl = timeline(ts, g);
-    const per = tl.keys.map(k => tl.counts.get(k) || 0);
+    const perAll = tl.keys.map(k => tl.counts.get(k) || 0);
     let run = 0;
-    timeChart.data.labels = tl.labels;
-    timeChart.data.datasets[0].data = per;
-    timeChart.data.datasets[1].data = per.map(n => (run += n));
+    const cumAll = perAll.map(n => (run += n));
+    let from = 0;
+    if (rangeDays && tl.keys.length) {
+      const startKey = bucketKey(Date.now() / 1000 - rangeDays * 86400, g);
+      from = Math.max(0, tl.keys.findIndex(k => k >= startKey));
+    }
+    timeChart.data.labels = tl.labels.slice(from);
+    timeChart.data.datasets[0].data = perAll.slice(from);
+    timeChart.data.datasets[1].data = cumAll.slice(from);
     timeChart.update();
     showEmpty('e-time', empty);
+    const rangeName = { 30: 'the last 30 days', 90: 'the last 90 days', 365: 'the last year' }[rangeDays];
+    const inRange = rangeDays ? ts.filter(t => t >= Date.now() / 1000 - rangeDays * 86400).length : ts.length;
+    $('timeNote').textContent = rangeDays
+      ? inRange.toLocaleString() + ' new reviews in ' + rangeName
+      : inRange.toLocaleString() + ' reviews in total';
 
     // Growth by source (monthly, cumulative, top 6 + other)
     const gl = timeline(ts, 'month');
@@ -308,6 +330,13 @@ fetch('data.json').then(r => r.json()).then(data => {
     const b = e.target.closest('button'); if (!b) return;
     g = b.dataset.g;
     document.querySelectorAll('#toggle button').forEach(x => x.classList.toggle('on', x === b));
+    render();
+  });
+
+  $('rangeToggle').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    rangeDays = Number(b.dataset.r);
+    document.querySelectorAll('#rangeToggle button').forEach(x => x.classList.toggle('on', x === b));
     render();
   });
 
