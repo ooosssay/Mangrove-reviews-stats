@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
 BASE = "https://api.mangrove.reviews/reviews"
-PAGE = 3000  # API rejects JSON requests above 3500
+PAGE = 1500  # reviews per request; the server rejects very large responses (413)
 # Tells the Mangrove team who is calling. Replace with your own repo URL.
 USER_AGENT = "mangrove-reviews-stats (https://github.com/ooosssay/Mangrove-reviews-stats)"
 TYPES = ["poi", "website", "company", "book", "other"]
