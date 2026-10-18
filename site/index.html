@@ -76,7 +76,7 @@
     <div class="card"><h2>Sites used to write reviews</h2><div class="list" id="clientList"></div><div class="sub" id="e-client" hidden>No data yet</div></div>
     <div class="card"><h2>Reviewer activity</h2><div class="sub note" id="m-reviewers"></div><div class="box small"><canvas id="reviewerChart"></canvas><div class="empty" id="e-reviewer" hidden>No data yet</div></div></div>
     <div class="card"><h2>Type of experience</h2><div class="sub note" id="m-exp"></div><div class="box small"><canvas id="expChart"></canvas><div class="empty" id="e-exp" hidden>No reviews with this info yet</div></div></div>
-    <div class="card"><h2>Affiliated and automated reviews</h2><div class="sub note">Based on flags set by the review writer</div><div class="box small"><canvas id="flagChart"></canvas><div class="empty" id="e-flag" hidden>No data yet</div></div></div>
+    <div class="card"><h2>Review flags</h2><div class="sub note">Optional flags set by the writer. A review can have more than one, and "no flag set" does not mean it is unaffiliated or genuine.</div><div class="box small"><canvas id="flagChart"></canvas><div class="empty" id="e-flag" hidden>No data yet</div></div></div>
   </div>
 </main>
 
@@ -198,8 +198,8 @@ fetch('data.json').then(r => r.json()).then(data => {
   });
   const flagChart = new Chart($('flagChart'), {
     type: 'bar',
-    data: { labels: ['Affiliated (owner or staff)', 'Auto-generated', 'Neither flagged'],
-      datasets: [{ data: [0, 0, 0], backgroundColor: [css('--accent2'), '#e9c46a', css('--accent')] }] },
+    data: { labels: ['Affiliated', ['Bot-', 'generated'], ['Personal', 'experience'], ['No flag', 'set']],
+      datasets: [{ data: [0, 0, 0, 0], backgroundColor: [css('--accent2'), '#e9c46a', '#264653', css('--accent')] }] },
     options: barOpts('reviews'), plugins: [valueLabels]
   });
 
@@ -290,10 +290,10 @@ fetch('data.json').then(r => r.json()).then(data => {
     $('m-exp').textContent = filled.toLocaleString() + ' of ' + rows.length.toLocaleString() + ' reviews filled this in.';
     showEmpty('e-exp', !ek.length);
 
-    // Affiliated / automated
-    let aff = 0, gen = 0, neither = 0;
-    rows.forEach(r => { if (r[5] & 1) aff++; if (r[5] & 2) gen++; if (!r[5]) neither++; });
-    flagChart.data.datasets[0].data = [aff, gen, neither];
+    // Review flags
+    let aff = 0, gen = 0, pers = 0, none = 0;
+    rows.forEach(r => { if (r[5] & 1) aff++; if (r[5] & 2) gen++; if (r[5] & 4) pers++; if (!r[5]) none++; });
+    flagChart.data.datasets[0].data = [aff, gen, pers, none];
     flagChart.update();
     showEmpty('e-flag', empty);
   }
