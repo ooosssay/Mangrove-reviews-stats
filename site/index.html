@@ -37,14 +37,11 @@
   .note { margin-bottom:6px; }
   .legend { display:flex; flex-wrap:wrap; gap:6px 8px; margin-top:10px; }
   .lg { display:inline-flex; align-items:center; gap:6px; min-height:40px; padding:4px 12px; border-radius:20px; background:var(--bg); border:1px solid var(--grid); color:var(--fg); font-size:.85rem; text-decoration:none; }
-  a.lg::after { content:"\2197"; color:var(--muted); font-size:.85em; }
   .sw { width:12px; height:12px; border-radius:3px; flex:0 0 auto; }
   .list .row { display:block; padding:10px 0; min-height:48px; color:var(--fg); text-decoration:none; border-bottom:1px solid var(--grid); }
   .list .row:last-child { border-bottom:0; }
   .rowtop { display:flex; justify-content:space-between; gap:12px; font-size:.9rem; }
   .rname { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  a.row .rname { text-decoration:underline; text-underline-offset:3px; }
-  a.row .rname::after { content:" \2197"; color:var(--muted); }
   .rcount { color:var(--muted); flex:0 0 auto; }
   .track { height:8px; border-radius:4px; background:var(--grid); margin-top:6px; overflow:hidden; }
   .fill { height:100%; background:var(--accent); border-radius:4px; }
@@ -76,7 +73,7 @@
   </div>
 
   <div class="grid">
-    <div class="card"><h2>Sites used to write reviews</h2><div class="sub note">Tap a site to open it</div><div class="list" id="clientList"></div><div class="sub" id="e-client" hidden>No data yet</div></div>
+    <div class="card"><h2>Sites used to write reviews</h2><div class="list" id="clientList"></div><div class="sub" id="e-client" hidden>No data yet</div></div>
     <div class="card"><h2>Reviewer activity</h2><div class="sub note" id="m-reviewers"></div><div class="box small"><canvas id="reviewerChart"></canvas><div class="empty" id="e-reviewer" hidden>No data yet</div></div></div>
     <div class="card"><h2>Type of experience</h2><div class="sub note" id="m-exp"></div><div class="box small"><canvas id="expChart"></canvas><div class="empty" id="e-exp" hidden>No reviews with this info yet</div></div></div>
     <div class="card"><h2>Affiliated and automated reviews</h2><div class="sub note">Based on flags set by the review writer</div><div class="box small"><canvas id="flagChart"></canvas><div class="empty" id="e-flag" hidden>No data yet</div></div></div>
@@ -151,13 +148,6 @@ fetch('data.json').then(r => r.json()).then(data => {
   $('meta').textContent = 'Updated ' + data.generated.slice(0, 16).replace('T', ' ') + ' UTC';
 
   const T = data.types;
-  // Only sources the data builder marked as safe-looking and seen often enough get links
-  const linkable = new Set(data.linkable || []);
-  const openLink = (node, c) => {
-    node.href = 'https://' + data.clients[c];
-    node.target = '_blank';
-    node.rel = 'noopener noreferrer nofollow';
-  };
   const rowsFor = f => f === 'all' ? data.rows : data.rows.filter(r => T[r[1]] === f);
   let filter = 'all', g = 'day';
 
@@ -252,26 +242,22 @@ fetch('data.json').then(r => r.json()).then(data => {
     growthChart.update();
     showEmpty('e-growth', empty);
 
-    // Clickable legend for the growth chart
-    $('growthLegend').replaceChildren(...groups.map(([name, , c], i) => {
-      const isLink = c !== null && linkable.has(c);
-      const item = el(isLink ? 'a' : 'span', 'lg');
-      if (isLink) openLink(item, c);
+    // Legend for the growth chart
+    $('growthLegend').replaceChildren(...groups.map(([name], i) => {
+      const item = el('span', 'lg');
       const sw = el('span', 'sw');
       sw.style.background = palette[i % palette.length];
       item.append(sw, el('span', null, name));
       return item;
     }));
 
-    // Sites used to write reviews (top 10, known sources only), as tappable rows
+    // Sites used to write reviews (top 10, known sources only), as rows
     const unknown = data.clients.indexOf('unknown');
     const cc = new Map();
     rows.forEach(r => { if (r[2] !== unknown) cc.set(r[2], (cc.get(r[2]) || 0) + 1); });
     const top = [...cc.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
     $('clientList').replaceChildren(...top.map(([c, n]) => {
-      const isLink = linkable.has(c);
-      const row = el(isLink ? 'a' : 'div', 'row');
-      if (isLink) openLink(row, c);
+      const row = el('div', 'row');
       const line = el('div', 'rowtop');
       line.append(el('span', 'rname', data.clients[c]), el('span', 'rcount', n.toLocaleString()));
       const track = el('div', 'track'), fill = el('div', 'fill');
