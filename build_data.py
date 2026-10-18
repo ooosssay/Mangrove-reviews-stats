@@ -9,11 +9,6 @@ BASE = "https://api.mangrove.reviews/reviews"
 PAGE = 3000  # API rejects JSON requests above 3500
 # Tells the Mangrove team who is calling. Replace with your own repo URL.
 USER_AGENT = "mangrove-reviews-stats (https://github.com/ooosssay/Mangrove-reviews-stats)"
-# A source only becomes a clickable link if it appears this many times overall
-# and looks like a normal site address. Sources are self-declared by review
-# writers, so this keeps one-off or junk entries from becoming links.
-MIN_REVIEWS_FOR_LINK = 5
-LINKABLE = re.compile(r"^[a-z0-9.-]+\.[a-z]{2,}(/[A-Za-z0-9._~-]+)*$")
 TYPES = ["poi", "website", "company", "book", "other"]
 
 
@@ -74,7 +69,7 @@ def client_name(client_id):
 
 def build(reviews):
     clients, experiences, reviewers = {}, {}, {}  # lowercase key -> index
-    display, per_client = [], {}
+    display = []
 
     def idx(table, key):
         return table.setdefault(key, len(table))
@@ -84,9 +79,7 @@ def build(reviews):
         if key not in clients:
             clients[key] = len(display)
             display.append(name)
-        i = clients[key]
-        per_client[i] = per_client.get(i, 0) + 1
-        return i
+        return clients[key]
 
     rows = []
     for r in sorted(reviews, key=lambda r: r["payload"]["iat"]):
@@ -94,7 +87,12 @@ def build(reviews):
         meta = p.get("metadata") or {}
         client = client_name(meta.get("client_id"))
         exp = meta.get("experience_context")
-        flags = (1 if meta.get("is_affiliated") else 0) | (2 if meta.get("is_generated") else 0)
+        # Flag fields must equal true when present (Mangrove spec). Bits: 1 affiliated, 2 bot, 4 personal experience
+        flags = (
+            (1 if meta.get("is_affiliated") is True else 0)
+            | (2 if meta.get("is_generated") is True else 0)
+            | (4 if meta.get("is_personal_experience") is True else 0)
+        )
         rows.append([
             p["iat"],
             TYPES.index(classify(p.get("sub"))),
@@ -104,16 +102,10 @@ def build(reviews):
             flags,
         ])
 
-    linkable = [
-        i for i, name in enumerate(display)
-        if per_client[i] >= MIN_REVIEWS_FOR_LINK and LINKABLE.match(name)
-    ]
-
     return {
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "types": TYPES,
         "clients": display,
-        "linkable": linkable,
         "experiences": list(experiences),
         "rows": rows,  # [timestamp, type, client, reviewer, experience, flags]
     }
