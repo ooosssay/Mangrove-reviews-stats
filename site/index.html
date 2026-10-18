@@ -35,6 +35,19 @@
   .empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:var(--card); color:var(--muted); text-align:center; }
   .empty[hidden] { display:none; }
   .note { margin-bottom:6px; }
+  .legend { display:flex; flex-wrap:wrap; gap:6px 8px; margin-top:10px; }
+  .lg { display:inline-flex; align-items:center; gap:6px; min-height:40px; padding:4px 12px; border-radius:20px; background:var(--bg); border:1px solid var(--grid); color:var(--fg); font-size:.85rem; text-decoration:none; }
+  a.lg::after { content:"\2197"; color:var(--muted); font-size:.85em; }
+  .sw { width:12px; height:12px; border-radius:3px; flex:0 0 auto; }
+  .list .row { display:block; padding:10px 0; min-height:48px; color:var(--fg); text-decoration:none; border-bottom:1px solid var(--grid); }
+  .list .row:last-child { border-bottom:0; }
+  .rowtop { display:flex; justify-content:space-between; gap:12px; font-size:.9rem; }
+  .rname { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  a.row .rname { text-decoration:underline; text-underline-offset:3px; }
+  a.row .rname::after { content:" \2197"; color:var(--muted); }
+  .rcount { color:var(--muted); flex:0 0 auto; }
+  .track { height:8px; border-radius:4px; background:var(--grid); margin-top:6px; overflow:hidden; }
+  .fill { height:100%; background:var(--accent); border-radius:4px; }
 </style>
 </head>
 <body>
@@ -59,10 +72,11 @@
     <h2>Growth by source</h2>
     <div class="sub note">Total reviews over time, split by the site used to write them</div>
     <div class="box"><canvas id="growthChart"></canvas><div class="empty" id="e-growth" hidden>No reviews of this type yet</div></div>
+    <div class="legend" id="growthLegend"></div>
   </div>
 
   <div class="grid">
-    <div class="card"><h2>Sites used to write reviews</h2><div class="box small"><canvas id="clientChart"></canvas><div class="empty" id="e-client" hidden>No data yet</div></div></div>
+    <div class="card"><h2>Sites used to write reviews</h2><div class="sub note">Tap a site to open it</div><div class="list" id="clientList"></div><div class="sub" id="e-client" hidden>No data yet</div></div>
     <div class="card"><h2>Reviewer activity</h2><div class="sub note" id="m-reviewers"></div><div class="box small"><canvas id="reviewerChart"></canvas><div class="empty" id="e-reviewer" hidden>No data yet</div></div></div>
     <div class="card"><h2>Type of experience</h2><div class="sub note" id="m-exp"></div><div class="box small"><canvas id="expChart"></canvas><div class="empty" id="e-exp" hidden>No reviews with this info yet</div></div></div>
     <div class="card"><h2>Affiliated and automated reviews</h2><div class="sub note">Based on flags set by the review writer</div><div class="box small"><canvas id="flagChart"></canvas><div class="empty" id="e-flag" hidden>No data yet</div></div></div>
@@ -91,6 +105,12 @@ const nextKey = (k, g) => {
 const fmt = (k, g) => new Date(k).toISOString().slice(0, g === 'month' ? 7 : 10);
 const short = s => (s.length > 28 ? s.slice(0, 27) + '…' : s);
 const showEmpty = (id, on) => { $(id).hidden = !on; };
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
 
 // Counts per bucket from a list of timestamps, filled so the timeline is continuous
 function timeline(timestamps, g) {
@@ -110,10 +130,34 @@ const palette = ['#2a9d8f', '#e76f51', '#e9c46a', '#264653', '#8ab17d', '#b5838d
 const noLegend = { legend: { display: false } };
 const countAxis = { beginAtZero: true, ticks: { precision: 0 } };
 
+// Draws each bar's value above it, so tiny bars are still readable
+const valueLabels = {
+  id: 'valueLabels',
+  afterDatasetsDraw(chart) {
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.fillStyle = css('--fg');
+    ctx.font = '600 12px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    chart.getDatasetMeta(0).data.forEach((bar, i) => {
+      ctx.fillText(Number(chart.data.datasets[0].data[i]).toLocaleString(), bar.x, bar.y - 4);
+    });
+    ctx.restore();
+  }
+};
+
 fetch('data.json').then(r => r.json()).then(data => {
   $('meta').textContent = 'Updated ' + data.generated.slice(0, 16).replace('T', ' ') + ' UTC';
 
   const T = data.types;
+  // Only sources the data builder marked as safe-looking and seen often enough get links
+  const linkable = new Set(data.linkable || []);
+  const openLink = (node, c) => {
+    node.href = 'https://' + data.clients[c];
+    node.target = '_blank';
+    node.rel = 'noopener noreferrer nofollow';
+  };
   const rowsFor = f => f === 'all' ? data.rows : data.rows.filter(r => T[r[1]] === f);
   let filter = 'all', g = 'day';
 
@@ -145,27 +189,28 @@ fetch('data.json').then(r => r.json()).then(data => {
     options: {
       interaction: { mode: 'index', intersect: false },
       scales: { x: { ticks: { maxTicksLimit: 10, maxRotation: 0 } }, y: { stacked: true, ...countAxis } },
-      plugins: { legend: { position: 'bottom' } }
+      plugins: { legend: { display: false } }
     }
   });
-  const clientChart = new Chart($('clientChart'), {
-    type: 'bar', data: { labels: [], datasets: [{ data: [], backgroundColor: css('--accent') }] },
-    options: { indexAxis: 'y', plugins: { ...noLegend, tooltip: { callbacks: { label: i => i.parsed.x + ' reviews' } } },
-      scales: { x: countAxis, y: { ticks: { callback(v) { return short(this.getLabelForValue(v)); } } } } }
+  // Bar charts: tapping anywhere in a bar's column shows its tooltip, even above a tiny bar
+  const barOpts = unit => ({
+    interaction: { mode: 'index', intersect: false },
+    plugins: { legend: { display: false }, tooltip: { callbacks: { label: i => i.parsed.y.toLocaleString() + ' ' + unit } } },
+    scales: { y: { ...countAxis, grace: '15%' } }
   });
   const reviewerChart = new Chart($('reviewerChart'), {
     type: 'bar', data: { labels: [], datasets: [{ data: [], backgroundColor: css('--accent') }] },
-    options: { plugins: noLegend, scales: { y: countAxis } }
+    options: barOpts('reviewers'), plugins: [valueLabels]
   });
   const expChart = new Chart($('expChart'), {
     type: 'bar', data: { labels: [], datasets: [{ data: [], backgroundColor: css('--accent') }] },
-    options: { plugins: noLegend, scales: { y: countAxis } }
+    options: barOpts('reviews'), plugins: [valueLabels]
   });
   const flagChart = new Chart($('flagChart'), {
     type: 'bar',
     data: { labels: ['Affiliated (owner or staff)', 'Auto-generated', 'Neither flagged'],
       datasets: [{ data: [0, 0, 0], backgroundColor: [css('--accent2'), '#e9c46a', css('--accent')] }] },
-    options: { plugins: noLegend, scales: { y: countAxis } }
+    options: barOpts('reviews'), plugins: [valueLabels]
   });
 
   function render() {
@@ -195,8 +240,8 @@ fetch('data.json').then(r => r.json()).then(data => {
     });
     const ranked = [...byClient.entries()].sort((a, b) =>
       [...b[1].values()].reduce((x, y) => x + y, 0) - [...a[1].values()].reduce((x, y) => x + y, 0));
-    const groups = ranked.slice(0, 6).map(([c, m]) => [data.clients[c], [m]]);
-    if (ranked.length > 6) groups.push(['other', ranked.slice(6).map(e => e[1])]);
+    const groups = ranked.slice(0, 6).map(([c, m]) => [data.clients[c], [m], c]);
+    if (ranked.length > 6) groups.push(['other', ranked.slice(6).map(e => e[1]), null]);
     growthChart.data.labels = gl.labels;
     growthChart.data.datasets = groups.map(([name, maps], i) => {
       let total = 0;
@@ -207,14 +252,34 @@ fetch('data.json').then(r => r.json()).then(data => {
     growthChart.update();
     showEmpty('e-growth', empty);
 
-    // Sites used to write reviews (top 10, known sources only)
+    // Clickable legend for the growth chart
+    $('growthLegend').replaceChildren(...groups.map(([name, , c], i) => {
+      const isLink = c !== null && linkable.has(c);
+      const item = el(isLink ? 'a' : 'span', 'lg');
+      if (isLink) openLink(item, c);
+      const sw = el('span', 'sw');
+      sw.style.background = palette[i % palette.length];
+      item.append(sw, el('span', null, name));
+      return item;
+    }));
+
+    // Sites used to write reviews (top 10, known sources only), as tappable rows
     const unknown = data.clients.indexOf('unknown');
     const cc = new Map();
     rows.forEach(r => { if (r[2] !== unknown) cc.set(r[2], (cc.get(r[2]) || 0) + 1); });
     const top = [...cc.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
-    clientChart.data.labels = top.map(e => data.clients[e[0]]);
-    clientChart.data.datasets[0].data = top.map(e => e[1]);
-    clientChart.update();
+    $('clientList').replaceChildren(...top.map(([c, n]) => {
+      const isLink = linkable.has(c);
+      const row = el(isLink ? 'a' : 'div', 'row');
+      if (isLink) openLink(row, c);
+      const line = el('div', 'rowtop');
+      line.append(el('span', 'rname', data.clients[c]), el('span', 'rcount', n.toLocaleString()));
+      const track = el('div', 'track'), fill = el('div', 'fill');
+      fill.style.width = (n / top[0][1] * 100) + '%';
+      track.append(fill);
+      row.append(line, track);
+      return row;
+    }));
     showEmpty('e-client', !top.length);
 
     // Reviewer activity (counts only)
