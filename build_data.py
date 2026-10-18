@@ -1,6 +1,8 @@
 """Downloads all Mangrove reviews and writes site/data.json (anonymous rows, no subject names)."""
 import json
 import re
+import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
@@ -12,17 +14,59 @@ USER_AGENT = "mangrove-reviews-stats (https://github.com/ooosssay/Mangrove-revie
 TYPES = ["poi", "website", "company", "book", "other"]
 
 
-def fetch_all():
-    reviews, offset = [], 0
-    while True:
-        url = f"{BASE}?limit={PAGE}&offset={offset}"
+PAUSE = 2  # seconds to wait between requests, to be gentle on the server
+
+
+def get_json(url, tries=5):
+    """GET a JSON URL, waiting and retrying when the server says to slow down."""
+    for attempt in range(tries):
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            batch = json.load(resp)["reviews"]
-        reviews.extend(batch)
-        if len(batch) < PAGE:
-            return reviews
-        offset += PAGE
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as err:
+            if err.code in (429, 500, 502, 503, 504) and attempt < tries - 1:
+                retry_after = err.headers.get("Retry-After", "")
+                wait = int(retry_after) if retry_after.isdigit() else 10 * (attempt + 1)
+                print(f"HTTP {err.code}, waiting {wait}s before retrying", flush=True)
+                time.sleep(min(wait, 120))
+                continue
+            raise
+        except urllib.error.URLError as err:
+            if attempt < tries - 1:
+                print(f"Network error ({err.reason}), retrying", flush=True)
+                time.sleep(10 * (attempt + 1))
+                continue
+            raise
+
+
+def fetch_all():
+    """Fetch every review. A page with fewer reviews than asked for is NOT treated
+    as the last page (the server may drop some rows after paging); we only stop
+    on an empty page, or one that adds nothing new."""
+    seen = {}  # signature -> review, so overlapping pages never double count
+    page, offset, n = PAGE, 0, 0
+    while True:
+        try:
+            batch = get_json(f"{BASE}?limit={page}&offset={offset}")["reviews"]
+        except urllib.error.HTTPError as err:
+            if err.code == 413 and page > 100:  # response too large: ask for less
+                page //= 2
+                print(f"HTTP 413, reducing page size to {page}", flush=True)
+                continue
+            raise
+        n += 1
+        new = 0
+        for r in batch:
+            if r["signature"] not in seen:
+                seen[r["signature"]] = r
+                new += 1
+        print(f"Page {n} (offset {offset}, limit {page}): {len(batch)} returned, "
+              f"{new} new, {len(seen)} total", flush=True)
+        if not batch or new == 0:
+            return list(seen.values())
+        offset += len(batch)
+        time.sleep(PAUSE)
 
 
 def classify(sub):
