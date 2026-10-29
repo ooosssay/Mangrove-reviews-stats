@@ -4,6 +4,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from collections import Counter
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
@@ -95,10 +96,13 @@ def client_name(client_id):
     https://mapcomplete.org/food.html?z=1  -> mapcomplete.org
     https://github.com/user/repo/blob/x    -> github.com/user/repo
     https://user.github.io/project/a.html  -> user.github.io/project
+    urn:example:app-one                    -> urn:example:app-one (kept whole)
     """
     s = (client_id or "").strip()
     if not s:
         return "unknown"
+    if s.lower().startswith("urn:"):
+        return s  # URNs have no host: keep the whole identifier so each one stays separate
     u = urlparse(s if "://" in s else "//" + s)
     if not u.hostname:
         return s
@@ -109,6 +113,22 @@ def client_name(client_id):
     if host.endswith(PAGES_SUFFIXES) and parts and "." not in parts[0]:
         return f"{host}/{parts[0]}"
     return host
+
+
+OTHER_SCHEME = re.compile(r"^([a-z][a-z0-9+.-]{0,19}):(?:([a-z0-9][a-z0-9-]{0,19}):)?")
+
+
+def other_kind(sub):
+    """Describe what KIND of subject an 'other' review is about (never the subject itself)."""
+    low = (sub or "").strip().lower()
+    if low.startswith("urn:maresi:"):
+        return "Reviews of reviews"
+    m = OTHER_SCHEME.match(low)
+    if not m:
+        return "Unrecognized"
+    if m.group(1) == "urn" and m.group(2):
+        return f"urn:{m.group(2)}"
+    return m.group(1) + ":"
 
 
 def build(reviews):
@@ -126,6 +146,7 @@ def build(reviews):
         return clients[key]
 
     rows = []
+    other_counts = Counter()
     for r in sorted(reviews, key=lambda r: r["payload"]["iat"]):
         p = r["payload"]
         meta = p.get("metadata") or {}
@@ -137,11 +158,14 @@ def build(reviews):
             | (2 if meta.get("is_generated") is True else 0)
             | (4 if meta.get("is_personal_experience") is True else 0)
         )
+        kind = classify(p.get("sub"))
+        if kind == "other":
+            other_counts[other_kind(p.get("sub"))] += 1
         rows.append([
             p["iat"],
-            TYPES.index(classify(p.get("sub"))),
+            TYPES.index(kind),
             client_idx(client),
-            idx(reviewers, r.get("kid")),  # anonymous number, key is never published
+            idx(reviewers, r.get("did") or r.get("kid")),  # anonymous number; keys bound to one identity count as one reviewer
             idx(experiences, exp) if exp else -1,
             flags,
         ])
@@ -151,12 +175,20 @@ def build(reviews):
         "types": TYPES,
         "clients": display,
         "experiences": list(experiences),
+        "other_kinds": [{"label": k, "count": n} for k, n in other_counts.most_common(3)],
         "rows": rows,  # [timestamp, type, client, reviewer, experience, flags]
     }
 
 
 if __name__ == "__main__":
     data = build(fetch_all())
+    # Show the biggest sources in the run log, so odd ones are easy to spot
+    tally = {}
+    for row in data["rows"]:
+        tally[row[2]] = tally.get(row[2], 0) + 1
+    print("Top sources:")
+    for i, n in sorted(tally.items(), key=lambda kv: -kv[1])[:25]:
+        print(f"  {n:6d}  {data['clients'][i]}")
     with open("site/data.json", "w") as f:
         json.dump(data, f, separators=(",", ":"))
     print("Wrote site/data.json with", len(data["rows"]), "reviews")
