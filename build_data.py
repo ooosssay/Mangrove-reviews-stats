@@ -9,17 +9,13 @@ from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
 BASE = "https://api.mangrove.reviews/reviews"
-PAGE = 1500  # reviews per request; the server rejects very large responses (413)
-# Tells the Mangrove team who is calling. Replace with your own repo URL.
+PAGE = 1500
 USER_AGENT = "mangrove-reviews-stats (https://github.com/ooosssay/Mangrove-reviews-stats)"
 TYPES = ["poi", "website", "company", "book", "other"]
-
-
-PAUSE = 2  # seconds to wait between requests, to be gentle on the server
+PAUSE = 2  # seconds between requests
 
 
 def get_json(url, tries=5):
-    """GET a JSON URL, waiting and retrying when the server says to slow down."""
     for attempt in range(tries):
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         try:
@@ -45,13 +41,13 @@ def fetch_all():
     """Fetch every review. A page with fewer reviews than asked for is NOT treated
     as the last page (the server may drop some rows after paging); we only stop
     on an empty page, or one that adds nothing new."""
-    seen = {}  # signature -> review, so overlapping pages never double count
+    seen = {}
     page, offset, n = PAGE, 0, 0
     while True:
         try:
             batch = get_json(f"{BASE}?limit={page}&offset={offset}")["reviews"]
         except urllib.error.HTTPError as err:
-            if err.code == 413 and page > 100:  # response too large: ask for less
+            if err.code == 413 and page > 100:
                 page //= 2
                 print(f"HTTP 413, reducing page size to {page}", flush=True)
                 continue
@@ -81,12 +77,12 @@ def classify(sub):
         return "book"
     if re.match(r"(?:urn:)?lei:", low):
         return "company"
-    return "other"  # includes reviews of reviews (urn:maresi:)
+    return "other"
 
 
-# Hosts that serve many unrelated projects: keep the owner/repo part of the path
+ALIASES = {"mapcomplete.osm.be": "mapcomplete.org"}
+
 CODE_HOSTS = {"github.com", "codeberg.org", "gitlab.com", "bitbucket.org"}
-# Per-user page hosts (user.github.io/project): keep the first path part (the project)
 PAGES_SUFFIXES = (".github.io", ".codeberg.page", ".gitlab.io")
 
 
@@ -102,11 +98,12 @@ def client_name(client_id):
     if not s:
         return "unknown"
     if s.lower().startswith("urn:"):
-        return s  # URNs have no host: keep the whole identifier so each one stays separate
+        return s  # URNs have no host, so keep the whole identifier
     u = urlparse(s if "://" in s else "//" + s)
     if not u.hostname:
         return s
     host = re.sub(r"^www\.", "", u.hostname.lower())
+    host = ALIASES.get(host, host)
     parts = [p for p in u.path.split("/") if p]
     if host in CODE_HOSTS:
         return "/".join([host] + parts[:2])
@@ -132,7 +129,7 @@ def other_kind(sub):
 
 
 def build(reviews):
-    clients, experiences, reviewers = {}, {}, {}  # lowercase key -> index
+    clients, experiences, reviewers = {}, {}, {}
     display = []
 
     def idx(table, key):
@@ -152,7 +149,7 @@ def build(reviews):
         meta = p.get("metadata") or {}
         client = client_name(meta.get("client_id"))
         exp = meta.get("experience_context")
-        # Flag fields must equal true when present (Mangrove spec). Bits: 1 affiliated, 2 bot, 4 personal experience
+        # bits: 1 affiliated, 2 bot, 4 personal experience
         flags = (
             (1 if meta.get("is_affiliated") is True else 0)
             | (2 if meta.get("is_generated") is True else 0)
@@ -165,7 +162,7 @@ def build(reviews):
             p["iat"],
             TYPES.index(kind),
             client_idx(client),
-            idx(reviewers, r.get("did") or r.get("kid")),  # anonymous number; keys bound to one identity count as one reviewer
+            idx(reviewers, r.get("did") or r.get("kid")),  # keys of one identity count as one reviewer
             idx(experiences, exp) if exp else -1,
             flags,
         ])
@@ -181,14 +178,25 @@ def build(reviews):
 
 
 if __name__ == "__main__":
-    data = build(fetch_all())
-    # Show the biggest sources in the run log, so odd ones are easy to spot
-    tally = {}
-    for row in data["rows"]:
-        tally[row[2]] = tally.get(row[2], 0) + 1
+    reviews = fetch_all()
+    data = build(reviews)
+
+    tally = Counter(row[2] for row in data["rows"])
+    imported = {}
+    for r in reviews:
+        meta = r["payload"].get("metadata") or {}
+        if meta.get("data_source"):
+            name = client_name(meta.get("client_id")).lower()
+            imported.setdefault(name, Counter())[str(meta["data_source"])[:60]] += 1
     print("Top sources:")
-    for i, n in sorted(tally.items(), key=lambda kv: -kv[1])[:25]:
-        print(f"  {n:6d}  {data['clients'][i]}")
+    for i, n in tally.most_common(25):
+        name = data["clients"][i]
+        line = f"  {n:6d}  {name}"
+        ds = imported.get(name.lower())
+        if ds:
+            line += "   [data_source: " + ", ".join(f"{k} x{v}" for k, v in ds.most_common(3)) + "]"
+        print(line)
+
     with open("site/data.json", "w") as f:
         json.dump(data, f, separators=(",", ":"))
     print("Wrote site/data.json with", len(data["rows"]), "reviews")
