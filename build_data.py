@@ -1,4 +1,4 @@
-"""Downloads all Mangrove reviews and writes site/data.json (anonymous rows, no subject names)."""
+"""Loads Mangrove reviews from the daily dump (API as fallback) and writes site/data.json (anonymous rows, no subject names)."""
 import json
 import re
 import time
@@ -9,10 +9,13 @@ from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
 BASE = "https://api.mangrove.reviews/reviews"
+DUMP_URL = "https://api.mangrove.reviews/dump"
 PAGE = 1500
 USER_AGENT = "mangrove-reviews-stats (https://github.com/ooosssay/Mangrove-reviews-stats)"
 TYPES = ["poi", "website", "company", "book", "other"]
 PAUSE = 2  # seconds between requests
+EXAMPLE_SUB = re.compile(r"^(https://example\.com/?|geo:0,0(\?.*)?)$", re.I)
+NOT_REVIEWS = {"delete", "report_abuse", "equivalence", "identity"}
 
 
 def get_json(url, tries=5):
@@ -64,6 +67,61 @@ def fetch_all():
             return list(seen.values())
         offset += len(batch)
         time.sleep(PAUSE)
+
+
+def fetch_dump():
+    """Download the latest daily dump (the server redirects to the file)."""
+    req = urllib.request.Request(DUMP_URL, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=600) as resp:
+        return json.load(resp)["reviews"]
+
+
+def action_of(record):
+    return record["payload"].get("action") or record.get("action")
+
+
+def maresi_target(sub):
+    sub = sub or ""
+    return sub[len("urn:maresi:"):] if sub.lower().startswith("urn:maresi:") else None
+
+
+def filter_dump(records):
+    """Keep what /reviews returns by default: no claims, deletions or abuse reports,
+    no superseded versions of edited reviews, no deleted reviews, no example subjects."""
+    by_action = Counter(action_of(r) or "review" for r in records)
+    print("Dump records by type:", dict(by_action), flush=True)
+    superseded, deleted = set(), set()
+    for r in records:
+        target = maresi_target(r["payload"].get("sub"))
+        if target and action_of(r) == "edit":
+            superseded.add(target)
+        elif target and action_of(r) == "delete":
+            deleted.add(target)
+    kept, seen = [], set()
+    for r in records:
+        sig = r["signature"]
+        if (action_of(r) in NOT_REVIEWS or sig in superseded or sig in deleted
+                or sig in seen or EXAMPLE_SUB.match(r["payload"].get("sub") or "")):
+            continue
+        seen.add(sig)
+        kept.append(r)
+    return kept
+
+
+def load_reviews():
+    try:
+        records = fetch_dump()
+        reviews = filter_dump(records)
+        if not reviews:
+            raise ValueError("dump contained no reviews")
+        newest = max(r["payload"]["iat"] for r in reviews)
+        age = (datetime.now(timezone.utc).timestamp() - newest) / 3600
+        print(f"Dump: {len(records)} records, {len(reviews)} reviews kept; "
+              f"newest review is {age:.1f} hours old", flush=True)
+        return reviews
+    except Exception as err:
+        print(f"Dump unavailable ({err}); falling back to the API", flush=True)
+        return fetch_all()
 
 
 def classify(sub):
@@ -155,9 +213,12 @@ def build(reviews):
             | (2 if meta.get("is_generated") is True else 0)
             | (4 if meta.get("is_personal_experience") is True else 0)
         )
-        kind = classify(p.get("sub"))
+        sub = p.get("sub")
+        if p.get("action") == "edit" and r.get("original_sub"):
+            sub = r["original_sub"]
+        kind = classify(sub)
         if kind == "other":
-            other_counts[other_kind(p.get("sub"))] += 1
+            other_counts[other_kind(sub)] += 1
         rows.append([
             p["iat"],
             TYPES.index(kind),
@@ -178,7 +239,7 @@ def build(reviews):
 
 
 if __name__ == "__main__":
-    reviews = fetch_all()
+    reviews = load_reviews()
     data = build(reviews)
 
     tally = Counter(row[2] for row in data["rows"])
