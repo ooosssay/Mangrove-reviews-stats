@@ -87,24 +87,51 @@ def maresi_target(sub):
 
 def filter_dump(records):
     """Keep what /reviews returns by default: no claims, deletions or abuse reports,
-    no superseded versions of edited reviews, no deleted reviews, no example subjects."""
-    by_action = Counter(action_of(r) or "review" for r in records)
-    print("Dump records by type:", dict(by_action), flush=True)
-    superseded, deleted = set(), set()
+    only the latest version of an edited review, no deleted reviews, no example subjects."""
+    print("Dump records by type:", dict(Counter(action_of(r) or "review" for r in records)), flush=True)
+    signatures = {r["signature"] for r in records}
+    superseded, deleted, edits_by_target = set(), set(), {}
+    unlinked_edits = 0
     for r in records:
         target = maresi_target(r["payload"].get("sub"))
-        if target and action_of(r) == "edit":
-            superseded.add(target)
+        if action_of(r) == "edit":
+            if target in signatures:
+                superseded.add(target)
+                edits_by_target.setdefault(target, []).append(r)
+            else:
+                unlinked_edits += 1
         elif target and action_of(r) == "delete":
             deleted.add(target)
-    kept, seen = [], set()
+    stale_edits = set()
+    for group in edits_by_target.values():
+        newest = max(group, key=lambda r: r["payload"]["iat"])
+        stale_edits.update(r["signature"] for r in group if r is not newest)
+
+    kept, seen, dropped = [], set(), Counter()
     for r in records:
         sig = r["signature"]
-        if (action_of(r) in NOT_REVIEWS or sig in superseded or sig in deleted
-                or sig in seen or EXAMPLE_SUB.match(r["payload"].get("sub") or "")):
-            continue
-        seen.add(sig)
-        kept.append(r)
+        if action_of(r) in NOT_REVIEWS:
+            dropped["claims, deletions, abuse reports"] += 1
+        elif sig in superseded:
+            dropped["superseded by an edit"] += 1
+        elif sig in stale_edits:
+            dropped["older edit of the same review"] += 1
+        elif sig in deleted:
+            dropped["deleted"] += 1
+        elif sig in seen:
+            dropped["duplicate"] += 1
+        elif EXAMPLE_SUB.match(r["payload"].get("sub") or ""):
+            dropped["example subject"] += 1
+        else:
+            seen.add(sig)
+            kept.append(r)
+    n_edits = sum(1 for r in records if action_of(r) == "edit")
+    print(f"Edits: {n_edits} total, {n_edits - unlinked_edits} point at a record in the dump, "
+          f"{unlinked_edits} do not", flush=True)
+    sample = next((r for r in records if action_of(r) == "edit"), None)
+    if sample:
+        print(f"Sample edit subject: {str(sample['payload'].get('sub'))[:30]}", flush=True)
+    print("Dropped:", dict(dropped), flush=True)
     return kept
 
 
@@ -138,7 +165,7 @@ def classify(sub):
     return "other"
 
 
-ALIASES = {"mapcomplete.osm.be": "mapcomplete.org"}
+ALIASES = {"mapcomplete.osm.be": "mapcomplete.org", "dev.mapcomplete.org": "mapcomplete.org"}
 
 CODE_HOSTS = {"github.com", "codeberg.org", "gitlab.com", "bitbucket.org"}
 PAGES_SUFFIXES = (".github.io", ".codeberg.page", ".gitlab.io")
