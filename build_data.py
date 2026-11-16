@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlparse
 
 BASE = "https://api.mangrove.reviews/reviews"
 DUMP_URL = "https://api.mangrove.reviews/dump"
+STATS_URL = "https://api.mangrove.reviews/stats/clients"
 PAGE = 1500
 USER_AGENT = "mangrove-reviews-stats (https://github.com/ooosssay/Mangrove-reviews-stats)"
 TYPES = ["poi", "website", "company", "book", "other"]
@@ -135,6 +136,18 @@ def filter_dump(records):
     return kept
 
 
+def log_client_stats():
+    """Print the API's own per-client counts (query strings removed), to see the raw client ids."""
+    try:
+        clients = get_json(STATS_URL, tries=2)["clients"]
+    except Exception as err:
+        print(f"Client stats unavailable ({err})", flush=True)
+        return
+    print("API client stats:")
+    for name, n in sorted(clients.items(), key=lambda kv: -kv[1])[:25]:
+        print(f"  {n:6d}  {name}")
+
+
 def load_reviews():
     try:
         records = fetch_dump()
@@ -165,6 +178,7 @@ def classify(sub):
     return "other"
 
 
+SPLIT_HOSTS = {"mangrove.reviews"}
 ALIASES = {"mapcomplete.osm.be": "mapcomplete.org", "dev.mapcomplete.org": "mapcomplete.org"}
 
 CODE_HOSTS = {"github.com", "codeberg.org", "gitlab.com", "bitbucket.org"}
@@ -177,6 +191,7 @@ def client_name(client_id):
     https://mapcomplete.org/food.html?z=1  -> mapcomplete.org
     https://github.com/user/repo/blob/x    -> github.com/user/repo
     https://user.github.io/project/a.html  -> user.github.io/project
+    https://mangrove.reviews/import/x      -> mangrove.reviews/import
     urn:example:app-one                    -> urn:example:app-one (kept whole)
     """
     s = (client_id or "").strip()
@@ -193,6 +208,8 @@ def client_name(client_id):
     if host in CODE_HOSTS:
         return "/".join([host] + parts[:2])
     if host.endswith(PAGES_SUFFIXES) and parts and "." not in parts[0]:
+        return f"{host}/{parts[0]}"
+    if host in SPLIT_HOSTS and parts and "." not in parts[0]:
         return f"{host}/{parts[0]}"
     return host
 
@@ -284,6 +301,8 @@ if __name__ == "__main__":
         if ds:
             line += "   [data_source: " + ", ".join(f"{k} x{v}" for k, v in ds.most_common(3)) + "]"
         print(line)
+
+    log_client_stats()
 
     with open("site/data.json", "w") as f:
         json.dump(data, f, separators=(",", ":"))
