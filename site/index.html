@@ -28,6 +28,7 @@
   .total { margin:10px 0 20px; font-size:1rem; color:var(--muted); }
   .total .num { color:var(--fg); font-size:2rem; font-weight:700; margin-right:6px; }
   .controls { display:flex; flex-wrap:wrap; gap:0 16px; }
+  #timeNote { margin-bottom:16px; }
   .toggle { display:inline-flex; gap:6px; margin-bottom:10px; }
   .toggle button { border:1px solid var(--grid); background:transparent; color:var(--fg); padding:8px 14px; border-radius:20px; font-size:.9rem; cursor:pointer; }
   .toggle button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
@@ -36,13 +37,17 @@
   .empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:var(--card); color:var(--muted); text-align:center; }
   .empty[hidden] { display:none; }
   .note { margin-bottom:6px; }
+  .h3 { font-size:1.05rem; margin:22px 0 4px; }
+  .box.mid { height:240px; }
   .legend { display:flex; flex-wrap:wrap; gap:6px 8px; margin-top:10px; }
   .lg { display:inline-flex; align-items:center; gap:6px; min-height:40px; padding:4px 12px; border-radius:20px; background:var(--bg); border:1px solid var(--grid); color:var(--fg); font-size:.85rem; text-decoration:none; }
+  .lg { max-width:100%; }
+  .lg span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .sw { width:12px; height:12px; border-radius:3px; flex:0 0 auto; }
   .list .row { display:block; padding:10px 0; min-height:48px; color:var(--fg); text-decoration:none; border-bottom:1px solid var(--grid); }
   .list .row:last-child { border-bottom:0; }
   .rowtop { display:flex; justify-content:space-between; gap:12px; font-size:.9rem; }
-  .rname { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .rname { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .rcount { color:var(--muted); flex:0 0 auto; }
   .track { height:8px; border-radius:4px; background:var(--grid); margin-top:6px; overflow:hidden; }
   .fill { height:100%; background:var(--accent); border-radius:4px; }
@@ -56,28 +61,33 @@
   <div class="pills" id="pills"></div>
   <div class="total"><span class="num" id="totalNum">0</span><span id="totalFor">reviews</span></div>
 
+  <div class="controls">
+    <div class="toggle" id="toggle">
+      <button data-g="day" class="on">Daily</button>
+      <button data-g="week">Weekly</button>
+      <button data-g="month">Monthly</button>
+    </div>
+    <div class="toggle" id="rangeToggle">
+      <button data-r="30">30 days</button>
+      <button data-r="90" class="on">90 days</button>
+      <button data-r="365">1 year</button>
+      <button data-r="0">All</button>
+    </div>
+  </div>
+  <div class="sub note" id="timeNote"></div>
+  <div class="sub note" id="filterNote" hidden></div>
+
   <div class="card">
     <h2>Reviews over time</h2>
-    <div class="controls">
-      <div class="toggle" id="toggle">
-        <button data-g="day" class="on">Daily</button>
-        <button data-g="week">Weekly</button>
-        <button data-g="month">Monthly</button>
-      </div>
-      <div class="toggle" id="rangeToggle">
-        <button data-r="30">30 days</button>
-        <button data-r="90" class="on">90 days</button>
-        <button data-r="365">1 year</button>
-        <button data-r="0">All</button>
-      </div>
-    </div>
-    <div class="sub note" id="timeNote"></div>
     <div class="box"><canvas id="timeChart"></canvas><div class="empty" id="e-time" hidden>No reviews of this type yet</div></div>
+    <h2 class="h3">New reviewers over time</h2>
+    <div class="sub note" id="usersNote"></div>
+    <div class="box mid"><canvas id="usersChart"></canvas><div class="empty" id="e-users" hidden>No reviews of this type yet</div></div>
   </div>
 
   <div class="card">
     <h2>Growth by source</h2>
-    <div class="sub note">Total reviews over time, split by the site used to write them</div>
+    <div class="sub note">New reviews since the start of the selected range, stacked by the site used to write them</div>
     <div class="box"><canvas id="growthChart"></canvas><div class="empty" id="e-growth" hidden>No reviews of this type yet</div></div>
     <div class="legend" id="growthLegend"></div>
   </div>
@@ -184,6 +194,20 @@ fetch('data.json').then(r => r.json()).then(data => {
       }
     }
   });
+  const usersChart = new Chart($('usersChart'), {
+    data: { labels: [], datasets: [
+      { type: 'bar', label: 'New reviewers', data: [], backgroundColor: '#8ab17d', yAxisID: 'y', barPercentage: 1, categoryPercentage: 0.9 },
+      { type: 'line', label: 'Total reviewers', data: [], borderColor: '#b5838d', pointRadius: 0, yAxisID: 'y1' }
+    ] },
+    options: {
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { ticks: { maxTicksLimit: 10, maxRotation: 0 } },
+        y: { ...countAxis, title: { display: true, text: 'New reviewers' } },
+        y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Total' } }
+      }
+    }
+  });
   const growthChart = new Chart($('growthChart'), {
     type: 'line', data: { labels: [], datasets: [] },
     options: {
@@ -221,45 +245,80 @@ fetch('data.json').then(r => r.json()).then(data => {
     $('totalNum').textContent = rows.length.toLocaleString();
     $('totalFor').textContent = filter === 'all' ? 'reviews' : 'reviews of ' + NAMES[filter].toLowerCase();
 
-    // Over time: full history is bucketed so the running total stays true,
+    // Over time. Full history is bucketed so running totals stay true,
     // then only the chosen range (e.g. last 90 days) is shown.
-    const tl = timeline(ts, g);
-    const perAll = tl.keys.map(k => tl.counts.get(k) || 0);
-    let run = 0;
-    const cumAll = perAll.map(n => (run += n));
-    let from = 0;
-    if (rangeDays && tl.keys.length) {
-      const startKey = bucketKey(Date.now() / 1000 - rangeDays * 86400, g);
-      from = Math.max(0, tl.keys.findIndex(k => k >= startKey));
-    }
-    timeChart.data.labels = tl.labels.slice(from);
-    timeChart.data.datasets[0].data = perAll.slice(from);
-    timeChart.data.datasets[1].data = cumAll.slice(from);
+    const windowed = list => {
+      const tl = timeline(list, g);
+      const per = tl.keys.map(k => tl.counts.get(k) || 0);
+      let run = 0;
+      const cum = per.map(n => (run += n));
+      let from = 0;
+      if (rangeDays && tl.keys.length) {
+        const startKey = bucketKey(Date.now() / 1000 - rangeDays * 86400, g);
+        from = Math.max(0, tl.keys.findIndex(k => k >= startKey));
+      }
+      return { keys: tl.keys.slice(from), labels: tl.labels.slice(from), per: per.slice(from), cum: cum.slice(from) };
+    };
+    const cutoff = Date.now() / 1000 - rangeDays * 86400;
+    const rangeName = { 30: 'the last 30 days', 90: 'the last 90 days', 365: 'the last year' }[rangeDays];
+
+    const w = windowed(ts);
+    timeChart.data.labels = w.labels;
+    timeChart.data.datasets[0].data = w.per;
+    timeChart.data.datasets[1].data = w.cum;
     timeChart.update();
     showEmpty('e-time', empty);
-    const rangeName = { 30: 'the last 30 days', 90: 'the last 90 days', 365: 'the last year' }[rangeDays];
-    const inRange = rangeDays ? ts.filter(t => t >= Date.now() / 1000 - rangeDays * 86400).length : ts.length;
+    const inRange = rangeDays ? ts.filter(t => t >= cutoff).length : ts.length;
     $('timeNote').textContent = rangeDays
       ? inRange.toLocaleString() + ' new reviews in ' + rangeName
       : inRange.toLocaleString() + ' reviews in total';
 
-    // Growth by source (monthly, cumulative, top 6 + other)
-    const gl = timeline(ts, 'month');
+    // New reviewers: each reviewer counts once, on the day of their first review in this view
+    const first = new Map();
+    rows.forEach(r => { if (!first.has(r[3])) first.set(r[3], r[0]); });  // rows are sorted by time
+    const firstTs = [...first.values()].sort((a, b) => a - b);
+    const wu = windowed(firstTs);
+    usersChart.data.labels = wu.labels;
+    usersChart.data.datasets[0].data = wu.per;
+    usersChart.data.datasets[1].data = wu.cum;
+    usersChart.update();
+    showEmpty('e-users', empty);
+    const newInRange = rangeDays ? firstTs.filter(t => t >= cutoff).length : firstTs.length;
+    $('usersNote').textContent = (rangeDays
+      ? newInRange.toLocaleString() + ' new reviewers in ' + rangeName
+      : firstTs.length.toLocaleString() + ' reviewers in total')
+      + '. Counted from their first review in this view.';
+
+    // Explain the "Other" filter with what kinds of subjects it holds
+    const note = $('filterNote');
+    if (filter === 'other' && (data.other_kinds || []).length) {
+      note.textContent = 'Mostly: ' + data.other_kinds.map(k => k.label + ' (' + k.count.toLocaleString() + ')').join(', ') + '.';
+      note.hidden = false;
+    } else {
+      note.hidden = true;
+    }
+
+    // Growth by source: same granularity and range as the chart above,
+    // counting up from zero at the start of the range, top 6 sources + other.
+    const shownKeys = w.keys;
+    const shownSet = new Set(shownKeys);
     const byClient = new Map();
     rows.forEach(r => {
-      const m = byClient.get(r[2]) || new Map(), k = bucketKey(r[0], 'month');
+      const k = bucketKey(r[0], g);
+      if (!shownSet.has(k)) return;
+      const m = byClient.get(r[2]) || new Map();
       m.set(k, (m.get(k) || 0) + 1); byClient.set(r[2], m);
     });
-    const ranked = [...byClient.entries()].sort((a, b) =>
-      [...b[1].values()].reduce((x, y) => x + y, 0) - [...a[1].values()].reduce((x, y) => x + y, 0));
+    const sum = m => [...m.values()].reduce((x, y) => x + y, 0);
+    const ranked = [...byClient.entries()].sort((a, b) => sum(b[1]) - sum(a[1]));
     const groups = ranked.slice(0, 6).map(([c, m]) => [data.clients[c], [m], c]);
     if (ranked.length > 6) groups.push(['other', ranked.slice(6).map(e => e[1]), null]);
-    growthChart.data.labels = gl.labels;
+    growthChart.data.labels = w.labels;
     growthChart.data.datasets = groups.map(([name, maps], i) => {
       let total = 0;
       return { label: name, fill: true, pointRadius: 0, borderWidth: 1,
         backgroundColor: palette[i % palette.length] + 'cc', borderColor: palette[i % palette.length],
-        data: gl.keys.map(k => (total += maps.reduce((s, m) => s + (m.get(k) || 0), 0))) };
+        data: shownKeys.map(k => (total += maps.reduce((s, m) => s + (m.get(k) || 0), 0))) };
     });
     growthChart.update();
     showEmpty('e-growth', empty);
