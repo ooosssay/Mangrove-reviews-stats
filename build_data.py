@@ -191,7 +191,7 @@ def client_name(client_id):
     https://mapcomplete.org/food.html?z=1  -> mapcomplete.org
     https://github.com/user/repo/blob/x    -> github.com/user/repo
     https://user.github.io/project/a.html  -> user.github.io/project
-    https://mangrove.reviews/import/x      -> mangrove.reviews/import
+    https://mangrove.reviews/import/x      -> mangrove.reviews/import/x (full path kept)
     urn:example:app-one                    -> urn:example:app-one (kept whole)
     """
     s = (client_id or "").strip()
@@ -209,8 +209,8 @@ def client_name(client_id):
         return "/".join([host] + parts[:2])
     if host.endswith(PAGES_SUFFIXES) and parts and "." not in parts[0]:
         return f"{host}/{parts[0]}"
-    if host in SPLIT_HOSTS and parts and "." not in parts[0]:
-        return f"{host}/{parts[0]}"
+    if host in SPLIT_HOSTS:
+        return "/".join([host] + parts)
     return host
 
 
